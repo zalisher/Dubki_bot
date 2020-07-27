@@ -1,77 +1,102 @@
-from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.common.keys import Keys
-from time import sleep
-from selenium.webdriver.common.action_chains import ActionChains
-
-
-# Выбор опции метро в выпадающем меню
-def set_actions(driver,element):
-    actions = ActionChains(driver)
-    actions.move_to_element(element)
-    actions.move_by_offset(0,40)
-    actions.click()
-    actions.perform()
-
-
-def subway_route(from_, to_):
-    driver = webdriver.Chrome()
-
-    maps = 'https://yandex.ru/maps/213/moscow/?ll=37.622504%2C55.753211&z=10'
-
-    driver.get(maps)
-    driver.maximize_window()
-    directions = driver.find_element_by_xpath('/html/body/div[1]/div[2]/div[2]/div/div/div/form/div[5]/div/div')
-    directions.click()
-
-    sleep(0.5)
-
-    fields = driver.find_elements_by_class_name('input__control')
-    where_from = fields[1]
-    where_from.send_keys(from_)
-    set_actions(driver,where_from)
-
-
-    sleep(1)
-
-    where_to = fields[2]
-    where_to.send_keys(to_)
-    set_actions(driver,where_to)
-
-
-    options = driver.find_element_by_class_name('route-travel-modes-view__comparison-button')
-    options.click()
-    sleep(2)
-    soup = BeautifulSoup(driver.page_source,'lxml')
-
-    #Поиск тега, содержащего данные о времени в пути на метро
-    subway = soup.find_all('div', class_="route-snippet-view _comparison _type_masstransit")[0].find('div', class_ = 'comparison-route-snippet-view__route-time-text')
-    subway_time = subway.text
-
-    try:
-        all = subway_time.split('ч')
-        hours = all[0].split('\xa0')[0]
-        minutes = all[1][1:].split('\xa0')[0]
-        result = int(hours)*60 + int(minutes)
-    except:
-        result = int(subway_time.split('\xa0')[0])
-
-    driver.quit()
-    return(result)
-
-print(subway_route('щелковская','курская'))
+import datetime
+import pandas as pd
+import Functions
+import telebot
 
 
 
-# import telebot
-# token = ''
-# bot = telebot.TeleBot(token)
-#
-# @bot.message_handler(commands=['start'])
-#
-# def greetings(message):
-#     bot.send_message(message.chat.id, 'Привет, я бот Дубков. Я помогу тебе добраться до дома')
-#
-#
-# bot.polling()
+
+keyboard2 = telebot.types.InlineKeyboardMarkup();  # наша клавиатура
+key_one = telebot.types.InlineKeyboardButton(text='Беговая', callback_data='begov')
+keyboard2.add(key_one); #добавляем кнопку в клавиатуру
+key_two = telebot.types.InlineKeyboardButton(text='Фили', callback_data='fili');
+keyboard2.add(key_two);
+key_three = telebot.types.InlineKeyboardButton(text='Кунцевская', callback_data='kunts');
+keyboard2.add(key_three);
+
+token = ''
+bot = telebot.TeleBot(token)
+
+
+def route_calc(message,where_from,where_to):
+    # Перемещение в метро
+    on_the_go = Functions.subway_route(where_from,where_to)
+
+    # Получаем информацию о текущем времени
+    # Попробую поставить в хендлеры бота. Пока не знаю, как он будет работать для множества людей
+    # Можно поробовать создавать словарь с ключем - номером чата собеседника
+    now = datetime.datetime.today()
+    now = str(now)
+    now_calc = now[11:16].split(':')
+
+    # Время, к которому мы прибудем на станцию электричек, on_the_go учитывает время, чтобы добраться
+    before_the_train = int(now_calc[0])*60 + int(now_calc[1]) + on_the_go
+
+    # Выбираем подходящую электричку
+    schedule = pd.read_csv(r'schedule_tomorrow.csv')
+    if before_the_train > 1438:
+        result = schedule[schedule['Begovaya_min'] == min(schedule['Begovaya_min'])].loc[:,['Begovaya','Odi','Odi_min']].values[0]
+    else:
+        target_time_df = schedule[schedule['Begovaya_min'] >= before_the_train]
+        result = target_time_df.loc[:,['Begovaya','Odi','Odi_min']].values[0]
+
+    # Время, к которому человек будет у автобуса, добавляю 4 минуты, чтобы дойти
+    bus_time = result[2] + 4
+    buses = pd.read_csv('Weekdays.csv',index_col=0)
+
+    if bus_time <= 40 or bus_time > 1422:
+        target_bus = '00:40'
+    else:
+        bs = buses[buses['minutes']>=int(result[2])]
+        target_bus = bs.loc[:,['Odi-Dub']].values[0][0]
+
+    bot.send_message(message.chat.id,'Электричка отправляется в {}.\nТы будешь в Одинцово в {}.\nБлижайший автобус в {}'.format(result[0],result[1],target_bus))
+
+
+
+
+@bot.message_handler(commands=['start'])
+def greetings(message):
+    bot.send_message(message.chat.id, 'Привет, я бот Дубков. Я помогу тебе добраться до дома. \n Напиши комаду /go, чтобы построить маршрут')
+
+@bot.message_handler(commands=['go'])
+def start(message):
+    msg = bot.send_message(message.chat.id, 'От какого метро поедешь?')
+    bot.register_next_step_handler(msg,start)
+
+def start(message):
+    global subway_from
+    subway_from = message.text
+
+    bot.send_message(message.chat.id, 'Через какую станцию?', reply_markup=keyboard2)
+
+
+@bot.message_handler(content_types=['text'])
+def go_command(message):
+    bot.send_message(message.chat.id, 'Напиши /go, чтобы построить маршрут')
+
+
+@bot.callback_query_handler(func=lambda call: True)
+def callback_worker(call):
+    chat_data = call.message
+    global destination
+    if call.data == "begov": #call.data это callback_data, которую мы указали при объявлении кнопки
+        destination = 'Беговая'
+        bot.send_message(chat_data.chat.id, "Рассчитываю маршрут")
+        route_calc(chat_data,subway_from,destination)
+    elif call.data == "fili":
+        bot.send_message(chat_data.chat.id, "Рассчитываю маршрут")
+        destination = 'Фили'
+        route_calc(chat_data,subway_from,destination)
+    elif call.data == 'kunts':
+        bot.send_message(chat_data.chat.id, "Рассчитываю маршрут")
+        destination = 'Кунцевская'
+        route_calc(chat_data,subway_from,destination)
+
+
+
+bot.polling()
+
+
+
 
