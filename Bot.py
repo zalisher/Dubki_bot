@@ -2,8 +2,8 @@ import datetime
 import pandas as pd
 import Functions
 import telebot
-
-
+import threading
+import time
 
 
 keyboard2 = telebot.types.InlineKeyboardMarkup();  # наша клавиатура
@@ -14,11 +14,11 @@ keyboard2.add(key_two);
 key_three = telebot.types.InlineKeyboardButton(text='Кунцевская', callback_data='kunts');
 keyboard2.add(key_three);
 
-token = ''
+token = '1092612662:AAEtP4KeNhAfs06UjQzIDy6UL7WExJcu0XU'
 bot = telebot.TeleBot(token)
 
 
-def route_calc(message,where_from,where_to):
+def route_calc(message,where_from,where_to,alias):
     # Перемещение в метро
     on_the_go = Functions.subway_route(where_from,where_to)
 
@@ -26,29 +26,39 @@ def route_calc(message,where_from,where_to):
     # Попробую поставить в хендлеры бота. Пока не знаю, как он будет работать для множества людей
     # Можно поробовать создавать словарь с ключем - номером чата собеседника
     now = datetime.datetime.today()
-    now = str(now)
-    now_calc = now[11:16].split(':')
+    now_str = str(now)
+    now_calc = now_str[11:16].split(':')
 
     # Время, к которому мы прибудем на станцию электричек, on_the_go учитывает время, чтобы добраться
     before_the_train = int(now_calc[0])*60 + int(now_calc[1]) + on_the_go
 
+
+
     # Выбираем подходящую электричку
-    schedule = pd.read_csv(r'schedule_tomorrow.csv')
+    schedule = pd.read_csv(r'schedule_tomorrow_'+alias+'.csv')
     if before_the_train > 1438:
-        result = schedule[schedule['Begovaya_min'] == min(schedule['Begovaya_min'])].loc[:,['Begovaya','Odi','Odi_min']].values[0]
+        result = schedule[schedule['Abfahrt_min'] == min(schedule['Abfahrt_min'])].loc[:,['Abfahrt','Odi','Odi_min']].values[0]
     else:
-        target_time_df = schedule[schedule['Begovaya_min'] >= before_the_train]
-        result = target_time_df.loc[:,['Begovaya','Odi','Odi_min']].values[0]
+        target_time_df = schedule[schedule['Abfahrt_min'] >= before_the_train]
+        result = target_time_df.loc[:,['Abfahrt','Odi','Odi_min']].values[0]
 
     # Время, к которому человек будет у автобуса, добавляю 4 минуты, чтобы дойти
     bus_time = result[2] + 4
-    buses = pd.read_csv('Weekdays.csv',index_col=0)
+
+    #
+    # Добавить выходные
+    weekday = now.weekday()
+    if weekday == 5 or weekday == 6:
+        buses = pd.read_csv('Weekends.csv',index_col=0)
+    else:
+        buses = pd.read_csv('Weekdays.csv', index_col=0)
+
 
     if bus_time <= 40 or bus_time > 1422:
         target_bus = '00:40'
     else:
-        bs = buses[buses['minutes']>=int(result[2])]
-        target_bus = bs.loc[:,['Odi-Dub']].values[0][0]
+        bs = buses[buses['minutes'] >= int(result[2])]
+        target_bus = str(bs.loc[:, ['Odi-Dub']].values[0][0])[12:16]
 
     bot.send_message(message.chat.id,'Электричка отправляется в {}.\nТы будешь в Одинцово в {}.\nБлижайший автобус в {}'.format(result[0],result[1],target_bus))
 
@@ -82,20 +92,28 @@ def callback_worker(call):
     global destination
     if call.data == "begov": #call.data это callback_data, которую мы указали при объявлении кнопки
         destination = 'Беговая'
+        # alias нужнен для доступа к нужному csv расписанию
+        alias = 'Begovaya'
         bot.send_message(chat_data.chat.id, "Рассчитываю маршрут")
-        route_calc(chat_data,subway_from,destination)
+        route_calc(chat_data,subway_from,destination,alias)
     elif call.data == "fili":
         bot.send_message(chat_data.chat.id, "Рассчитываю маршрут")
         destination = 'Фили'
-        route_calc(chat_data,subway_from,destination)
+        alias = 'Fili'
+        route_calc(chat_data,subway_from,destination,alias)
     elif call.data == 'kunts':
         bot.send_message(chat_data.chat.id, "Рассчитываю маршрут")
         destination = 'Кунцевская'
-        route_calc(chat_data,subway_from,destination)
+        alias = 'Kuntsevo'
+        route_calc(chat_data,subway_from,destination,alias)
 
 
 
-bot.polling()
+t1 = threading.Thread(target = Functions.schedule_init)
+t1.start()
+time.sleep(5)
+t2 = threading.Thread(target = bot.polling())
+t2.start()
 
 
 

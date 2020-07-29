@@ -1,11 +1,9 @@
 from bs4 import BeautifulSoup
 from selenium import webdriver
-from selenium.webdriver.common.keys import Keys
-from time import sleep
 from selenium.webdriver.common.action_chains import ActionChains
-
-
-
+import schedule
+import time
+import pandas as pd
 
 # Выбор опции метро в выпадающем меню
 def set_actions(driver,element):
@@ -26,7 +24,7 @@ def subway_route(from_, to_):
     directions = driver.find_element_by_xpath('/html/body/div[1]/div[2]/div[2]/div/div/div/form/div[5]/div/div')
     directions.click()
 
-    sleep(0.5)
+    time.sleep(0.5)
 
     fields = driver.find_elements_by_class_name('input__control')
     where_from = fields[1]
@@ -34,7 +32,7 @@ def subway_route(from_, to_):
     set_actions(driver,where_from)
 
 
-    sleep(1)
+    time.sleep(1)
 
     where_to = fields[2]
     where_to.send_keys(to_)
@@ -43,7 +41,7 @@ def subway_route(from_, to_):
 
     options = driver.find_element_by_class_name('route-travel-modes-view__comparison-button')
     options.click()
-    sleep(2)
+    time.sleep(2)
     soup = BeautifulSoup(driver.page_source,'lxml')
 
     #Поиск тега, содержащего данные о времени в пути на метро
@@ -67,3 +65,53 @@ def subway_route(from_, to_):
 
     driver.quit()
     return(result)
+
+
+# Сбор актувльного расписания по 3 станциям на следующий день
+def daily_schedule():
+    #   1. Беговая
+    #   2. Кунцево
+    #   3. Фили
+
+    url_list = {'Begovaya':'https://www.tutu.ru/rasp.php?st1=201&st2=1701&date=tomorrow&print=yes',
+                'Kuntsevo':'https://www.tutu.ru/rasp.php?st1=501&st2=1701&date=tomorrow&print=yes',
+                'Fili':'https://www.tutu.ru/rasp.php?st1=401&st2=1701&date=tomorrow&print=yes'}
+
+    for name, url in url_list.items():
+        driver = webdriver.Chrome()
+
+        driver.get(url)
+        soup = BeautifulSoup(driver.page_source, 'lxml')
+        res = soup.find('table', class_='schedule_table_classic').find('tbody')
+        driver.quit()
+
+        trs = res.find_all('tr')
+        data = {'Abfahrt': [], 'Odi_min': [], 'Abfahrt_min': [], 'Odi': []}
+
+        for tr in trs:
+            time = tr.find_all('a')
+            a1 = str(time[0].text)
+            data['Abfahrt'].append(a1)
+            min_only1 = int(a1.split(':')[0]) * 60 + int(a1.split(':')[1])
+            data['Abfahrt_min'].append(min_only1)
+
+            a2 = str(time[1].text)
+            data['Odi'].append(str(a2))
+            min_only2 = int(a2.split(':')[0]) * 60 + int(a2.split(':')[1])
+            data['Odi_min'].append(min_only2)
+
+        final_table_tomorrow = pd.DataFrame(data)
+
+        final_table_tomorrow = final_table_tomorrow.sort_values(by='Abfahrt_min')
+        final_table_tomorrow.to_csv('schedule_tomorrow_'+name+'.csv')
+        print('done')
+
+
+# schedule.every(10).seconds.do(daily_schedule)
+
+def schedule_init():
+    schedule.every().day.at('03:00').do(daily_schedule)
+
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
