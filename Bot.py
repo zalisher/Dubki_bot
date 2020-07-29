@@ -14,7 +14,7 @@ keyboard2.add(key_two);
 key_three = telebot.types.InlineKeyboardButton(text='Кунцевская', callback_data='kunts');
 keyboard2.add(key_three);
 
-token = '1092612662:AAEtP4KeNhAfs06UjQzIDy6UL7WExJcu0XU'
+token = ""
 bot = telebot.TeleBot(token)
 
 
